@@ -30,43 +30,10 @@ of the authors and should not be interpreted as representing official policies,
 either expressed or implied, of the FreeBSD Project.
 """
 
-PATHS_GISMU_DIRS = ['gismu', 'experimental_gismu']
+#PATHS_GISMU_DIRS = ['gismu', 'experimental_gismu']
+PATHS_GISMU_DIRS = ['experimental_gismu']
 
-class RESULT(object):
-    def max(a, b):
-        if a.getValue() < b.getValue():
-            return b
-        else:
-            return a
-
-class PASS(RESULT):
-    def getName():
-        return 'PASS'
-    def getValue():
-        return 0
-class WARNING(RESULT):
-    def getName():
-        return 'WARNING'
-    def getValue():
-        return 1
-class FAIL(RESULT):
-    def getName():
-        return 'FAIL'
-    def getValue():
-        return 2
-
-CONSONANTS = ['b', 'c', 'd', 'f', 'g', 'j', 'k', 'l', 'm', 'n', 'p', 'r', 's', 't', 'v', 'x', 'z']
-VOWELS = ['a', 'e', 'i', 'o', 'u']
-
-def isCorV(ch):
-    if ch.lower() in CONSONANTS:
-        return 'c'
-    if ch.lower() in VOWELS:
-        return 'v'
-    if ch.lower() is 'y':
-        # sort of a consonant
-        return 'y'
-    return '#'
+from pygimste import gismu
 
 def getFileList(args, realpath=True, skipRegex=None):
     import os
@@ -102,25 +69,41 @@ def getFileList(args, realpath=True, skipRegex=None):
 
     return sorted(result)
 
-class YAMLValidator:
-    def __init__(self):
-        pass
+
+def gismuFromFilename(gismuFile):
+    import os
+    import re
+    gfile = os.path.basename(gismuFile)
+    g = re.match('(.....)\.yaml', gfile)
+    if g:
+        return g.group(1)
+    return None
+
+GISMU = {}
+
+def load_gismu_file(gismuFile):
+    f = open(gismuFile, 'r')
+    gStr = gismuFromFilename(gismuFile)
+    t = f.read()
+    gObj = gismu.yaml2Gismu(gStr, t)
+    GISMU[gObj.get()] = gObj
+
+def getGismuDirs():
+    import os
+    root = os.path.dirname(os.path.realpath(__file__))
+    return [os.path.join(root, d) for d in PATHS_GISMU_DIRS]
 
 class Metrics:
     def __init__(self):
         self.gismuCount = 0
         self.definitionLang = {}
 
-    def add(self, other):
-        self.gismuCount += other.gismuCount
-        for k,v in other.definitionLang.items():
-            if k in self.definitionLang.keys():
-                self.definitionLang[k] += v
-            else:
-                self.definitionLang[k] = v
-
     def addGismu(self, gismu):
         self.gismuCount += 1
+        for lang, defs in gismu.getDefinitions().items():
+            for d in defs:
+                assert(lang == d.getLang())
+                self.addDefLang(d.getLang())
 
     def addDefLang(self, lang):
         if lang in self.definitionLang.keys():
@@ -133,115 +116,54 @@ class Metrics:
         for k,v in self.definitionLang.items():
             print("%d defs in language %s" % (v, k))
 
-class GismuValidator(YAMLValidator):
-    def __init__(self, gismu):
-        self.gismu = gismu
-        self.metrics = Metrics()
+# Validating all gismu as a whole collection
+class CollectiveValidator:
+    def __init__(self):
+        self.data = {}
+        self.dataDuplicates = {}
 
-    def checkGismu(self, ast):
-        sections = {'word': GismuValidator.checkGismuWord,
-                'rafsi': GismuValidator.checkGismuRafsi,
-                'examples': GismuValidator.checkGismuExamples,
-                'definitions': GismuValidator.checkGismuDefinitions }
-        result = PASS
-        for k,v in ast.items():
-            sub = sections.get(k)
-            if sub is not None:
-                subResult = sub(self, v)
-                result = RESULT.max(result, subResult)
-            else:
-                print("unrecognised section: %s" % (k))
-        return result
-    def checkGismuWord(self, ast):
-        self.metrics.addGismu(self.gismu)
-
-        # Must match filename
-        if ast != self.gismu:
-            "gismu does not match file name"
-            return FAIL
-
-        # CLL 4.4 - always have five letters
-        if len(self.gismu) != 5:
-            "gismu must always have five letters"
-            return FAIL
-
-        # CLL 4.4 - start with a consonant and end with a single vowel
-        # CLL 4.4 - always contain exactly one consonant pair
-        cvString = ''
-        for l in self.gismu:
-            cvString += isCorV(l)
-        if cvString not in ['ccvcv', 'cvccv']:
-            "gismu form is invalid"
-            return FAIL
-
-        # TODO: check for conflicting gismu (see CLL 4.14.4)
-        return PASS
-
-    def checkGismuRafsi(self, ast):
-        # TODO: check rasfi are well formed
-        return PASS
-
-    def checkGismuExamples(self, ast):
-        # TODO: check examples are well formed
-        return PASS
-
-    def checkGismuDefinitions(self, ast):
-        for k,v in ast.items():
-            self.metrics.addDefLang(k)
-        # TODO: check definitions are well formed
-        return PASS
-
-def gismuFromFilename(gismuFile):
-    import os
-    import re
-    gfile = os.path.basename(gismuFile)
-    g = re.match('(.....)\.yaml', gfile)
-    if g:
-        return g.group(1)
-    return None
-
-def validate_gismu(gismuFile):
-    f = open(gismuFile, 'r')
-    t = f.read()
-    import yaml
-    y = None
-    try:
-        y = yaml.load(t)
-    except yaml.YAMLError as exc:
-        print(exc)
-        if hasattr(exc, 'problem_mark'):
-            mark = exc.problem_mark
-            print("Error position: (%s:%s)" % (mark.line+1, mark.column+1))
-    if y is None:
-        return FAIL
-
-    g = gismuFromFilename(gismuFile)
-    gv = GismuValidator(g)
-    result = gv.checkGismu(y)
-    return (result, gv.metrics)
-
-def getGismuDirs():
-    import os
-    root = os.path.dirname(os.path.realpath(__file__))
-    return [os.path.join(root, d) for d in PATHS_GISMU_DIRS]
+    def addGismu(self, gismu):
+        g = GismuInfo(gismu, rasfi)
+        if gismu not in self.data.keys():
+            self.data[gismu] = g
+        else:
+            if gismu not in self.dataDuplicates.keys():
+                self.dataDuplicates[gismu] = []
+            self.dataDuplicates[gismu].append(self.data.pop(gismu))
+            self.dataDuplicates[gismu].append(g)
 
 def main():
     gismu_dirs = getGismuDirs()
-    count = {PASS: 0, WARNING: 0, FAIL: 0}
-    total = Metrics()
+    countFail = 0
+    countProcessed = 0
     for x in getFileList(gismu_dirs, skipRegex='.*\.md$'):
-        (result, metrics) = validate_gismu(x)
-        print("%s: %s" % (x, result.getName()))
-        count[result] = count[result] + 1
-        total.add(metrics)
+        countProcessed += 1
+        try:
+            load_gismu_file(x)
+        except gismu.YamlParseException as exc:
+            countFail += 1
+            print(exc)
+        except gismu.GismuValidationException as exc:
+            countFail += 1
+            print(exc)
+        except Exception as exc:
+            # Unknowon/unexpected
+            raise exc
+        if countProcessed % 100 == 0:
+            print("...loaded %d" % (countProcessed))
+
+    print("...loaded %d" % (countProcessed))
+
+    total = Metrics()
+    for k,v in GISMU.items():
+        total.addGismu(v)
 
     print("Summary:")
-    for r,c in count.items():
-        print("%s %d" % (r.getName(), c))
+    print("%d failed to load" % (countFail))
     total.print()
 
     exitcode = 0
-    if count[FAIL]:
+    if countFail:
         exitcode=1
     import sys
     sys.exit(exitcode)
