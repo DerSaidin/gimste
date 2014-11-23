@@ -30,8 +30,8 @@ of the authors and should not be interpreted as representing official policies,
 either expressed or implied, of the FreeBSD Project.
 """
 
-#PATHS_GISMU_DIRS = ['gismu', 'experimental_gismu']
-PATHS_GISMU_DIRS = ['experimental_gismu']
+PATHS_GISMU_DIRS = ['gismu', 'experimental_gismu']
+#PATHS_GISMU_DIRS = ['experimental_gismu']
 
 from pygimste import gismu
 
@@ -79,6 +79,10 @@ def gismuFromFilename(gismuFile):
         return g.group(1)
     return None
 
+def experimentalFromFilename(gismuFile):
+    import re
+    return re.search('experimental_gismu', gismuFile) is not None
+
 GISMU = {}
 
 def load_gismu_file(gismuFile):
@@ -86,6 +90,8 @@ def load_gismu_file(gismuFile):
     gStr = gismuFromFilename(gismuFile)
     t = f.read()
     gObj = gismu.yaml2Gismu(gStr, t)
+    if experimentalFromFilename(gismuFile):
+        gObj.setExperimental(True)
     GISMU[gObj.get()] = gObj
 
 def getGismuDirs():
@@ -93,12 +99,29 @@ def getGismuDirs():
     root = os.path.dirname(os.path.realpath(__file__))
     return [os.path.join(root, d) for d in PATHS_GISMU_DIRS]
 
-class Metrics:
+class CollectionVisitor:
+    def __init__(self):
+        pass
+
+    def visitGismu(self, word, data):
+        pass
+
+    def visitCollection(self):
+        for k,v in GISMU.items():
+            self.visitGismu(k,v)
+
+    def print(self):
+        pass
+
+    def getResult(self):
+        return True
+
+class CollectionMetrics(CollectionVisitor):
     def __init__(self):
         self.gismuCount = 0
         self.definitionLang = {}
 
-    def addGismu(self, gismu):
+    def visitGismu(self, word, gismu):
         self.gismuCount += 1
         for lang, defs in gismu.getDefinitions().items():
             for d in defs:
@@ -116,14 +139,26 @@ class Metrics:
         for k,v in self.definitionLang.items():
             print("%d defs in language %s" % (v, k))
 
+class GismuInfo:
+    def __init__(self, word, gismuObj):
+        pass
+
 # Validating all gismu as a whole collection
-class CollectiveValidator:
+class CollectionValidator(CollectionVisitor):
     def __init__(self):
         self.data = {}
         self.dataDuplicates = {}
+        self.setDirty()
 
-    def addGismu(self, gismu):
-        g = GismuInfo(gismu, rasfi)
+    def setDirty(self):
+        self.failed = None   # None => dirty, need to validate()
+        self.validationErrors = []
+
+    def visitGismu(self, gismu, gismuObj):
+        self.failed = None
+
+        # Cache to find duplicates
+        g = GismuInfo(gismu, gismuObj)
         if gismu not in self.data.keys():
             self.data[gismu] = g
         else:
@@ -131,6 +166,83 @@ class CollectiveValidator:
                 self.dataDuplicates[gismu] = []
             self.dataDuplicates[gismu].append(self.data.pop(gismu))
             self.dataDuplicates[gismu].append(g)
+
+    def addValidationError(self, ve):
+        self.failed = True
+        self.validationErrors.append(ve)
+
+    def validate(self):
+        if self.failed is not None:
+            # hasn't changed since the last time we calculated it
+            return
+        self.failed = False
+        self.validationErrors = []
+
+        # CLL 4.14 - conflicting gismu: identical
+        if len(self.dataDuplicates.keys()) > 0:
+            for k in self.dataDuplicates.keys():
+                self.addValidationError("duplicate gismu: %s" % (k))
+
+        # Get sorted list of gismu
+        glist = []
+        glist.extend(self.data.keys())
+        glist.extend(self.dataDuplicates.keys())
+        glist = sorted(glist)
+
+        # CLL 4.4 - no two gismu differ only in the final vowel (exception: broda, brode, brodi, brodo, and brodu)
+        xPrev = None
+        for x in glist:
+            if xPrev is None:
+                continue
+            else:
+                if x[0:4] == xPrev[0:4]:
+                    self.addValidationError("no two gismu can differ only in the final vowel: %s %s" % (x, xPrev))
+
+        SIMILAR_CONSONANT = {
+            'b': ['p', 'v'],
+            'c': ['j', 's'],
+            'd': ['t'],
+            'f': ['p', 'v'],
+            'g': ['k', 'x'],
+            'j': ['c', 'z'],
+            'k': ['g', 'x'],
+            'l': ['r'],
+            'm': ['n'],
+            'n': ['m'],
+            'p': ['b', 'f'],
+            'r': ['l'],
+            's': ['c', 'z'],
+            't': ['d'],
+            'v': ['b', 'f'],
+            'x': ['g', 'k'],
+            'z': ['j', 's'],
+                }
+
+        # CLL 4.14 - conflicting gismu: too similar
+        for xs in glist:
+            for i in range(0, len(xs)):
+                replacement = SIMILAR_CONSONANT.get(xs[i], [])
+                for r in replacement:
+                    xs2 = xs[:i] + r + xs[i+1:]
+                    if xs2 in self.data.keys():
+                        self.addValidationError("gismu too similar: %s %s  (differs by %s to %s)" % (xs, xs2, xs[i], r))
+
+        # Pairwise checks
+        for i in range(0, len(glist)):
+            for j in range(i+1, len(glist)):
+                (glist[i], glist[j])
+
+
+    def print(self):
+        self.validate()
+        for ve in self.validationErrors:
+            print(ve)
+
+    # True = validate ok
+    def getResult(self):
+        self.validate()
+        return not self.failed
+
 
 def main():
     gismu_dirs = getGismuDirs()
@@ -152,15 +264,17 @@ def main():
         if countProcessed % 100 == 0:
             print("...loaded %d" % (countProcessed))
 
-    print("...loaded %d" % (countProcessed))
+    print("...loaded %d (%d failed to load)" % (countProcessed, countFail))
 
-    total = Metrics()
-    for k,v in GISMU.items():
-        total.addGismu(v)
+    cmet = CollectionMetrics()
+    cmet.visitCollection()
+
+    cval = CollectionValidator()
+    cval.visitCollection()
 
     print("Summary:")
-    print("%d failed to load" % (countFail))
-    total.print()
+    cmet.print()
+    cval.print()
 
     exitcode = 0
     if countFail:

@@ -118,6 +118,9 @@ class Gismu:
         # The gismu itself
         self.gismu = gismu
 
+        # Is this gismu experimental
+        self.experimental = False
+
         # The yaml text representing this gismu
         self.textYaml = None
 
@@ -135,6 +138,9 @@ class Gismu:
         # Only access this via getPossibleRafsi().
         # None => not cached.
         self._rafsiForms = None
+
+    def setExperimental(self, experi):
+        self.experimental = experi
 
     def get(self):
         return self.gismu
