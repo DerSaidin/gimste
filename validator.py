@@ -143,10 +143,55 @@ class GismuInfo:
     def __init__(self, word, gismuObj):
         pass
 
+class PairValidator:
+    def __init__(self):
+        pass
+
+    def validatePair(self, validator, a, b):
+        pass
+
+class ConflictingPairValidator(PairValidator):
+    def __init__(self):
+        pass
+
+    def validatePair(self, validator, a, b):
+        # CLL 4.14 - conflicting gismu: too similar
+        for aSimilar, aIdx, aLetter, rLetter in a.getSimilarForms():
+            if b.get() == aSimilar:
+                validator.addValidationError("gismu too similar: %s %s  (differs by %s to %s)" % (str(b), str(a), aLetter, rLetter))
+                return
+        for bSimilar, bIdx, bLetter, rLetter in b.getSimilarForms():
+            if a.get() == bSimilar:
+                validator.addValidationError("gismu too similar: %s %s  (differs by %s to %s)" % (str(a), str(b), bLetter, rLetter))
+                return
+
+class ConflictingRafsiValidator(PairValidator):
+    def __init__(self):
+        pass
+
+    def validatePair(self, validator, a, b):
+        # check for gismu that have the same rafsi
+        intersect = set(a.getRafsi()).intersection(b.getRafsi())
+        if intersect:
+            validator.addValidationError("gismu have same rafsi: %s %s  (common rafsi: %s)" % (str(b), str(a), str(intersect)))
+            return
+
+
+class FinalVowelValidator(PairValidator):
+    def __init__(self):
+        pass
+
+    def validatePair(self, validator, a, b):
+        # CLL 4.4 - no two gismu differ only in the final vowel (exception: broda, brode, brodi, brodo, and brodu)
+        if a.get()[0:4] == b.get()[0:4]:
+            if (a.get()[0:4] == "brod") and (b.get()[0:4] == "brod"):
+                return
+            validator.addValidationError("no two gismu can differ only in the final vowel: %s %s" % (str(a), str(b)))
+
 # Validating all gismu as a whole collection
 class CollectionValidator(CollectionVisitor):
     def __init__(self):
-        self.data = {}
+        self.data = set()
         self.dataDuplicates = {}
         self.setDirty()
 
@@ -154,17 +199,16 @@ class CollectionValidator(CollectionVisitor):
         self.failed = None   # None => dirty, need to validate()
         self.validationErrors = []
 
-    def visitGismu(self, gismu, gismuObj):
+    def visitGismu(self, gismu, g):
         self.failed = None
 
         # Cache to find duplicates
-        g = GismuInfo(gismu, gismuObj)
-        if gismu not in self.data.keys():
-            self.data[gismu] = g
+        if g not in self.data:
+            self.data.add(g)
         else:
             if gismu not in self.dataDuplicates.keys():
                 self.dataDuplicates[gismu] = []
-            self.dataDuplicates[gismu].append(self.data.pop(gismu))
+            self.dataDuplicates[gismu].append(self.data.remove(gismu))
             self.dataDuplicates[gismu].append(g)
 
     def addValidationError(self, ve):
@@ -185,52 +229,28 @@ class CollectionValidator(CollectionVisitor):
 
         # Get sorted list of gismu
         glist = []
-        glist.extend(self.data.keys())
-        glist.extend(self.dataDuplicates.keys())
+        glist.extend(self.data)
+        for k,v in self.dataDuplicates.items():
+            glist.extend(v)
         glist = sorted(glist)
 
-        # CLL 4.4 - no two gismu differ only in the final vowel (exception: broda, brode, brodi, brodo, and brodu)
-        xPrev = None
-        for x in glist:
-            if xPrev is None:
-                continue
-            else:
-                if x[0:4] == xPrev[0:4]:
-                    self.addValidationError("no two gismu can differ only in the final vowel: %s %s" % (x, xPrev))
-
-        SIMILAR_CONSONANT = {
-            'b': ['p', 'v'],
-            'c': ['j', 's'],
-            'd': ['t'],
-            'f': ['p', 'v'],
-            'g': ['k', 'x'],
-            'j': ['c', 'z'],
-            'k': ['g', 'x'],
-            'l': ['r'],
-            'm': ['n'],
-            'n': ['m'],
-            'p': ['b', 'f'],
-            'r': ['l'],
-            's': ['c', 'z'],
-            't': ['d'],
-            'v': ['b', 'f'],
-            'x': ['g', 'k'],
-            'z': ['j', 's'],
-                }
-
-        # CLL 4.14 - conflicting gismu: too similar
-        for xs in glist:
-            for i in range(0, len(xs)):
-                replacement = SIMILAR_CONSONANT.get(xs[i], [])
-                for r in replacement:
-                    xs2 = xs[:i] + r + xs[i+1:]
-                    if xs2 in self.data.keys():
-                        self.addValidationError("gismu too similar: %s %s  (differs by %s to %s)" % (xs, xs2, xs[i], r))
+        # Adjacent pairwise checks
+        adjacentPairwiseChecks = [FinalVowelValidator()]
+        for i in range(1, len(glist)):
+            a = glist[i-1]
+            b = glist[i]
+            for check in adjacentPairwiseChecks:
+                check.validatePair(self, a, b)
 
         # Pairwise checks
+        pairwiseChecks = [ConflictingPairValidator(), ConflictingRafsiValidator()]
         for i in range(0, len(glist)):
             for j in range(i+1, len(glist)):
-                (glist[i], glist[j])
+                a = glist[i]
+                b = glist[j]
+
+                for check in pairwiseChecks:
+                    check.validatePair(self, a,b)
 
 
     def print(self):

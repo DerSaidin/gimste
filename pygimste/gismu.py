@@ -139,6 +139,27 @@ class Gismu:
         # None => not cached.
         self._rafsiForms = None
 
+    def __lt__(self, other):
+        return self.gismu < other.gismu
+    def __le__(self, other):
+        return self.gismu <= other.gismu
+    def __eq__(self, other):
+        return self.gismu == other.gismu
+    def __ge__(self, other):
+        return self.gismu >= other.gismu
+    def __gt__(self, other):
+        return self.gismu > other.gismu
+    def __ne__(self, other):
+        return self.gismu != other.gismu
+    def __hash__(self):
+        return hash(self.gismu)
+
+    def __str__(self):
+        result = self.gismu
+        if self.experimental:
+            result += ' [experimental]'
+        return result
+
     def setExperimental(self, experi):
         self.experimental = experi
 
@@ -186,6 +207,40 @@ class Gismu:
                 raise GismuValidationException(self.gismu, "gismu form is invalid: %s" % (self.gismuCV))
             self._rafsiForms = forms
         return self._rafsiForms
+
+    # Return variations on the gismu form that cannot also be gismu because they are too similar
+    def getSimilarForms(self):
+        SIMILAR_CONSONANT = {
+            'b': ['p', 'v'],
+            'c': ['j', 's'],
+            'd': ['t'],
+            'f': ['p', 'v'],
+            'g': ['k', 'x'],
+            'j': ['c', 'z'],
+            'k': ['g', 'x'],
+            'l': ['r'],
+            'm': ['n'],
+            'n': ['m'],
+            'p': ['b', 'f'],
+            'r': ['l'],
+            's': ['c', 'z'],
+            't': ['d'],
+            'v': ['b', 'f'],
+            'x': ['g', 'k'],
+            'z': ['j', 's'],
+                }
+
+        # CLL 4.14 - conflicting gismu: too similar
+        result = []
+        for i in range(0, len(self.gismu)):
+            origLetter = self.gismu[i]
+            replacements = SIMILAR_CONSONANT.get(origLetter, [])
+            for r in replacements:
+                similarForm = self.gismu[:i] + r + self.gismu[i+1:]
+                # Results are tuple of (similar form, letter index, original letter, new letter)
+                result.append((similarForm, i, origLetter, r))
+        return result
+
 
     def addExample(self, example):
         self.examples.append(example)
