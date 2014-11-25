@@ -116,6 +116,20 @@ class CollectionVisitor:
     def getResult(self):
         return True
 
+class LevenshteinPairMetric:
+    # Implementation from https://en.wikibooks.org/wiki/Algorithm_Implementation/Strings/Levenshtein_distance#Python
+    def levenshtein(seq1, seq2):
+        oneago = None
+        thisrow = range(1, len(seq2) + 1) + [0]
+        for x in xrange(len(seq1)):
+            twoago, oneago, thisrow = oneago, thisrow, [0] * len(seq2) + [x + 1]
+            for y in xrange(len(seq2)):
+                delcost = oneago[y] + 1
+                addcost = thisrow[y - 1] + 1
+                subcost = oneago[y - 1] + (seq1[x] != seq2[y])
+                thisrow[y] = min(delcost, addcost, subcost)
+        return thisrow[len(seq2) - 1]
+
 class CollectionMetrics(CollectionVisitor):
     def __init__(self):
         self.gismuCount = 0
@@ -143,50 +157,49 @@ class GismuInfo:
     def __init__(self, word, gismuObj):
         pass
 
-class PairValidator:
+class PairVisitor:
     def __init__(self):
         pass
 
-    def validatePair(self, validator, a, b):
+    def visitPair(self, a, b):
         pass
 
-class ConflictingPairValidator(PairValidator):
-    def __init__(self):
-        pass
+class ConflictingPairValidator(PairVisitor):
+    def __init__(self, validator):
+        self.validator = validator
 
-    def validatePair(self, validator, a, b):
+    def visitPair(self, a, b):
         # CLL 4.14 - conflicting gismu: too similar
         for aSimilar, aIdx, aLetter, rLetter in a.getSimilarForms():
             if b.get() == aSimilar:
-                validator.addValidationError("gismu too similar: %s %s  (differs by %s to %s)" % (str(b), str(a), aLetter, rLetter))
+                self.validator.addValidationError("gismu too similar: %s %s  (differs by %s to %s)" % (str(b), str(a), aLetter, rLetter))
                 return
         for bSimilar, bIdx, bLetter, rLetter in b.getSimilarForms():
             if a.get() == bSimilar:
-                validator.addValidationError("gismu too similar: %s %s  (differs by %s to %s)" % (str(a), str(b), bLetter, rLetter))
+                self.validator.addValidationError("gismu too similar: %s %s  (differs by %s to %s)" % (str(a), str(b), bLetter, rLetter))
                 return
 
-class ConflictingRafsiValidator(PairValidator):
-    def __init__(self):
-        pass
+class ConflictingRafsiValidator(PairVisitor):
+    def __init__(self, validator):
+        self.validator = validator
 
-    def validatePair(self, validator, a, b):
+    def visitPair(self, a, b):
         # check for gismu that have the same rafsi
         intersect = set(a.getRafsi()).intersection(b.getRafsi())
         if intersect:
-            validator.addValidationError("gismu have same rafsi: %s %s  (common rafsi: %s)" % (str(b), str(a), str(intersect)))
-            return
+            self.validator.addValidationError("gismu have same rafsi: %s %s  (common rafsi: %s)" % (str(b), str(a), str(intersect)))
 
 
-class FinalVowelValidator(PairValidator):
-    def __init__(self):
-        pass
+class FinalVowelValidator(PairVisitor):
+    def __init__(self, validator):
+        self.validator = validator
 
-    def validatePair(self, validator, a, b):
+    def visitPair(self, a, b):
         # CLL 4.4 - no two gismu differ only in the final vowel (exception: broda, brode, brodi, brodo, and brodu)
         if a.get()[0:4] == b.get()[0:4]:
             if (a.get()[0:4] == "brod") and (b.get()[0:4] == "brod"):
                 return
-            validator.addValidationError("no two gismu can differ only in the final vowel: %s %s" % (str(a), str(b)))
+            self.validator.addValidationError("no two gismu can differ only in the final vowel: %s %s" % (str(a), str(b)))
 
 # Validating all gismu as a whole collection
 class CollectionValidator(CollectionVisitor):
@@ -235,22 +248,22 @@ class CollectionValidator(CollectionVisitor):
         glist = sorted(glist)
 
         # Adjacent pairwise checks
-        adjacentPairwiseChecks = [FinalVowelValidator()]
+        adjacentPairwiseChecks = [FinalVowelValidator(self)]
         for i in range(1, len(glist)):
             a = glist[i-1]
             b = glist[i]
             for check in adjacentPairwiseChecks:
-                check.validatePair(self, a, b)
+                check.visitPair(a, b)
 
         # Pairwise checks
-        pairwiseChecks = [ConflictingPairValidator(), ConflictingRafsiValidator()]
+        pairwiseChecks = [ConflictingPairValidator(self), ConflictingRafsiValidator(self)]
         for i in range(0, len(glist)):
             for j in range(i+1, len(glist)):
                 a = glist[i]
                 b = glist[j]
 
                 for check in pairwiseChecks:
-                    check.validatePair(self, a,b)
+                    check.visitPair(a,b)
 
 
     def print(self):
