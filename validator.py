@@ -34,6 +34,7 @@ PATHS_GISMU_DIRS = ['gismu', 'experimental_gismu']
 #PATHS_GISMU_DIRS = ['experimental_gismu']
 
 from pygimste import gismu
+from pygimste import visitors
 
 def getFileList(args, realpath=True, skipRegex=None):
     import os
@@ -99,43 +100,57 @@ def getGismuDirs():
     root = os.path.dirname(os.path.realpath(__file__))
     return [os.path.join(root, d) for d in PATHS_GISMU_DIRS]
 
-class CollectionVisitor:
-    def __init__(self):
-        pass
-
-    def visitGismu(self, word, data):
-        pass
-
-    def visitCollection(self):
-        for k,v in GISMU.items():
-            self.visitGismu(k,v)
+class GismuValidationError:
+    def __init__(self, msg, args):
+        self.msg = msg
+        self.gismu = args
 
     def print(self):
-        pass
+        gismulist = ', '.join([str(g) for g in self.gismu])
+        print("%s: %s" % (self.msg, gismulist))
 
-    def getResult(self):
+class Validator:
+    def __init__(self):
+        self.validationErrors = []
+
+    def isValidator(self):
         return True
 
-class LevenshteinPairMetric:
-    # Implementation from https://en.wikibooks.org/wiki/Algorithm_Implementation/Strings/Levenshtein_distance#Python
-    def levenshtein(seq1, seq2):
-        oneago = None
-        thisrow = range(1, len(seq2) + 1) + [0]
-        for x in xrange(len(seq1)):
-            twoago, oneago, thisrow = oneago, thisrow, [0] * len(seq2) + [x + 1]
-            for y in xrange(len(seq2)):
-                delcost = oneago[y] + 1
-                addcost = thisrow[y - 1] + 1
-                subcost = oneago[y - 1] + (seq1[x] != seq2[y])
-                thisrow[y] = min(delcost, addcost, subcost)
-        return thisrow[len(seq2) - 1]
+    def addValidationError(self, msg, *args):
+        self.failed = True
+        self.validationErrors.append(GismuValidationError(msg, args))
 
-class CollectionMetrics(CollectionVisitor):
+    def print(self):
+        for ve in self.validationErrors:
+            ve.print()
+
+    def isValid(self):
+        return len(self.validationErrors) == 0
+
+class Metric:
+    def __init__(self, name):
+        self.name = name
+        pass
+
+    def isMetric(self):
+        return True
+
+    def print(self):
+        print("---- %s: ----" % (self.name))
+        self.printResults()
+
+    def printResults(self):
+        pass
+
+class LanguageMetrics(visitors.CollectionVisitor, Metric):
     def __init__(self):
+        name = "Language Counts Metrics"
+        Metric.__init__(self, name)
+        visitors.CollectionVisitor.__init__(self, name)
         self.gismuCount = 0
         self.definitionLang = {}
 
-    def visitGismu(self, word, gismu):
+    def visitGismu(self, gismu):
         self.gismuCount += 1
         for lang, defs in gismu.getDefinitions().items():
             for d in defs:
@@ -148,137 +163,131 @@ class CollectionMetrics(CollectionVisitor):
         else:
             self.definitionLang[lang] = 1
 
-    def print(self):
+    def printResults(self):
         print("%d gismu" % (self.gismuCount))
         for k,v in self.definitionLang.items():
             print("%d defs in language %s" % (v, k))
 
-class GismuInfo:
-    def __init__(self, word, gismuObj):
-        pass
-
-class PairVisitor:
+class ConflictingPairValidator(visitors.CollectionVisitorPair, Validator):
     def __init__(self):
-        pass
+        name = "Conflicting Gismu Validator"
+        Validator.__init__(self)
+        visitors.CollectionVisitorPair.__init__(self, name)
 
-    def visitPair(self, a, b):
-        pass
-
-class ConflictingPairValidator(PairVisitor):
-    def __init__(self, validator):
-        self.validator = validator
-
-    def visitPair(self, a, b):
+    def visitGismuPair(self, a, b):
         # CLL 4.14 - conflicting gismu: too similar
         for aSimilar, aIdx, aLetter, rLetter in a.getSimilarForms():
             if b.get() == aSimilar:
-                self.validator.addValidationError("gismu too similar: %s %s  (differs by %s to %s)" % (str(b), str(a), aLetter, rLetter))
+                msg = "gismu too similar (differs by %s to %s)" % (aLetter, rLetter)
+                self.addValidationError(msg, a, b)
                 return
         for bSimilar, bIdx, bLetter, rLetter in b.getSimilarForms():
             if a.get() == bSimilar:
-                self.validator.addValidationError("gismu too similar: %s %s  (differs by %s to %s)" % (str(a), str(b), bLetter, rLetter))
+                msg = "gismu too similar (differs by %s to %s)" % (bLetter, rLetter)
+                self.addValidationError(msg, a, b)
                 return
 
-class ConflictingRafsiValidator(PairVisitor):
-    def __init__(self, validator):
-        self.validator = validator
+class ConflictingRafsiValidator(visitors.CollectionVisitorPair, Validator):
+    def __init__(self):
+        name = "Conflicting Rafsi Validator"
+        Validator.__init__(self)
+        visitors.CollectionVisitorPair.__init__(self, name)
 
-    def visitPair(self, a, b):
+    def visitGismuPair(self, a, b):
         # check for gismu that have the same rafsi
         intersect = set(a.getRafsi()).intersection(b.getRafsi())
         if intersect:
-            self.validator.addValidationError("gismu have same rafsi: %s %s  (common rafsi: %s)" % (str(b), str(a), str(intersect)))
+            msg = "gismu have same rafsi (common rafsi: %s)" % (str(intersect))
+            self.addValidationError(msg, a, b)
 
 
-class FinalVowelValidator(PairVisitor):
-    def __init__(self, validator):
-        self.validator = validator
+class FinalVowelValidator(visitors.CollectionVisitorAdjacent, Validator):
+    def __init__(self):
+        name = "Final Vowel Validator"
+        Validator.__init__(self)
+        visitors.CollectionVisitorAdjacent.__init__(self, name)
 
-    def visitPair(self, a, b):
+    def visitGismuAdjacent(self, a, b):
         # CLL 4.4 - no two gismu differ only in the final vowel (exception: broda, brode, brodi, brodo, and brodu)
         if a.get()[0:4] == b.get()[0:4]:
             if (a.get()[0:4] == "brod") and (b.get()[0:4] == "brod"):
                 return
-            self.validator.addValidationError("no two gismu can differ only in the final vowel: %s %s" % (str(a), str(b)))
+            msg = "gismu only differ in final vowel" % (str(a), str(b))
+            self.addValidationError(msg, a, b)
 
-# Validating all gismu as a whole collection
-class CollectionValidator(CollectionVisitor):
+class DuplicateValidator(visitors.CollectionVisitorDuplicates, Validator):
     def __init__(self):
-        self.data = set()
-        self.dataDuplicates = {}
-        self.setDirty()
+        name = "Duplicate Validator"
+        Validator.__init__(self)
+        visitors.CollectionVisitorDuplicates.__init__(self, name)
 
-    def setDirty(self):
-        self.failed = None   # None => dirty, need to validate()
-        self.validationErrors = []
-
-    def visitGismu(self, gismu, g):
-        self.failed = None
-
-        # Cache to find duplicates
-        if g not in self.data:
-            self.data.add(g)
-        else:
-            if gismu not in self.dataDuplicates.keys():
-                self.dataDuplicates[gismu] = []
-            self.dataDuplicates[gismu].append(self.data.remove(gismu))
-            self.dataDuplicates[gismu].append(g)
-
-    def addValidationError(self, ve):
-        self.failed = True
-        self.validationErrors.append(ve)
-
-    def validate(self):
-        if self.failed is not None:
-            # hasn't changed since the last time we calculated it
-            return
-        self.failed = False
-        self.validationErrors = []
-
+    def visitGismuDuplicates(self, dupList):
         # CLL 4.14 - conflicting gismu: identical
-        if len(self.dataDuplicates.keys()) > 0:
-            for k in self.dataDuplicates.keys():
-                self.addValidationError("duplicate gismu: %s" % (k))
+        msg = "gismu duplicate form"
+        self.addValidationError(msg, *dupList)
 
-        # Get sorted list of gismu
-        glist = []
-        glist.extend(self.data)
-        for k,v in self.dataDuplicates.items():
-            glist.extend(v)
-        glist = sorted(glist)
+class LevenshteinPairMetric(visitors.CollectionVisitorPair, Metric):
+    def __init__(self):
+        name = "Smallest Levenshtein Distances Metric"
+        Metric.__init__(self, name)
+        visitors.CollectionVisitorPair.__init__(self, name)
+        self.top = []
 
-        # Adjacent pairwise checks
-        adjacentPairwiseChecks = [FinalVowelValidator(self)]
-        for i in range(1, len(glist)):
-            a = glist[i-1]
-            b = glist[i]
-            for check in adjacentPairwiseChecks:
-                check.visitPair(a, b)
+    @staticmethod
+    def levenshtein1(seq1, seq2):
+        # Implementation from https://en.wikibooks.org/wiki/Algorithm_Implementation/Strings/Levenshtein_distance#Python
+        oneago = None
+        thisrow = range(1, len(seq2) + 1) + [0]
+        for x in xrange(len(seq1)):
+            twoago, oneago, thisrow = oneago, thisrow, [0] * len(seq2) + [x + 1]
+            for y in xrange(len(seq2)):
+                delcost = oneago[y] + 1
+                addcost = thisrow[y - 1] + 1
+                subcost = oneago[y - 1] + (seq1[x] != seq2[y])
+                thisrow[y] = min(delcost, addcost, subcost)
+        return thisrow[len(seq2) - 1]
 
-        # Pairwise checks
-        pairwiseChecks = [ConflictingPairValidator(self), ConflictingRafsiValidator(self)]
-        for i in range(0, len(glist)):
-            for j in range(i+1, len(glist)):
-                a = glist[i]
-                b = glist[j]
+    @staticmethod
+    def levenshtein2(seq1, seq2):
+        # Implementation from http://rosettacode.org/wiki/Levenshtein_distance#Python
+        from functools import lru_cache
+        @lru_cache(maxsize=4095)
+        def ld(s, t):
+            if not s: return len(t)
+            if not t: return len(s)
+            if s[0] == t[0]: return ld(s[1:], t[1:])
+            l1 = ld(s, t[1:])
+            l2 = ld(s[1:], t)
+            l3 = ld(s[1:], t[1:])
+            return 1 + min(l1, l2, l3)
+        return ld(seq1, seq2)
 
-                for check in pairwiseChecks:
-                    check.visitPair(a,b)
+    @staticmethod
+    def levenshtein(seq1, seq2):
+        return LevenshteinPairMetric.levenshtein2(seq1, seq2)
+
+    def visitGismuPair(self, a, b):
+        import heapq
+        ldist = LevenshteinPairMetric.levenshtein(a.get(), b.get())
+        heapq.heappush(self.top, (ldist, (a, b)))
+
+    def printResults(self):
+        import heapq
+        if True:
+            # Print all results < 3
+            while self.top:
+                (s, (a,b)) = heapq.heappop(self.top)
+                if s >= 3:
+                    break
+                print("%d\t%s to %s" % (s, str(a), str(b)))
+        else:
+            # Print top 32 results
+            small = heapq.nsmallest(32, self.top)
+            for (s, (a,b)) in small:
+                print("%d\t%s to %s" % (s, str(a), str(b)))
 
 
-    def print(self):
-        self.validate()
-        for ve in self.validationErrors:
-            print(ve)
-
-    # True = validate ok
-    def getResult(self):
-        self.validate()
-        return not self.failed
-
-
-def main():
-    gismu_dirs = getGismuDirs()
+def LoadGismu(gismu_dirs):
     countFail = 0
     countProcessed = 0
     for x in getFileList(gismu_dirs, skipRegex='.*\.md$'):
@@ -297,21 +306,49 @@ def main():
         if countProcessed % 100 == 0:
             print("...loaded %d" % (countProcessed))
 
-    print("...loaded %d (%d failed to load)" % (countProcessed, countFail))
+    print("...loaded %d" % (countProcessed))
+    print("%d failed to load" % (countFail))
 
-    cmet = CollectionMetrics()
-    cmet.visitCollection()
+    return countFail
 
-    cval = CollectionValidator()
-    cval.visitCollection()
+def main():
+    # Load Gismu
+    gismu_dirs = getGismuDirs()
+    countFail = LoadGismu(gismu_dirs)
 
-    print("Summary:")
-    cmet.print()
-    cval.print()
+    # Create visitors
+    visitMan = visitors.CollectionVisitorManager()
+    visitMan.addVisitor(ConflictingPairValidator())
+    visitMan.addVisitor(ConflictingRafsiValidator())
+    visitMan.addVisitor(FinalVowelValidator())
+    visitMan.addVisitor(LanguageMetrics())
+    #visitMan.addVisitor(LevenshteinPairMetric())
 
+    # Run visitors
+    visitMan.visit(GISMU)
+
+    # Output Results
+    validators = visitMan.getValidatorVisitors()
+    hasInvalid = False in [v.isValid() for v in validators]
+    print("==== Validation: ====")
+    for v in validators:
+        v.print()
+    if hasInvalid:
+        print("FAIL")
+    else:
+        print("PASS")
+
+    metrics = visitMan.getMetricVisitors()
+    print("==== Summary: ====")
+    for m in metrics:
+        m.print()
+
+    # Exit with error code
     exitcode = 0
     if countFail:
-        exitcode=1
+        exitcode = exitcode | 1
+    if hasInvalid:
+        exitcode = exitcode | 2
     import sys
     sys.exit(exitcode)
 
